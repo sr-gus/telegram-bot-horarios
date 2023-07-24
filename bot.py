@@ -1,6 +1,6 @@
 from os import system, name
 from time import sleep
-from requests import get
+import requests
 from bs4 import BeautifulSoup
 from numpy import zeros, int16, max as nmax, add, ndenumerate
 from random import sample
@@ -9,11 +9,12 @@ from itertools import product
 from functools import reduce
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Alignment
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, ConversationHandler, MessageHandler, CallbackQueryHandler, CallbackContext, ContextTypes, filters
 import logging, json
 import logging.handlers
 
+CONFIRMATION = 0
 ENTERING_ASSIGNATURES = 1
 SELECTING_SCHEDULES = 2
 
@@ -36,17 +37,34 @@ logging.basicConfig(
     ]
 )
 
+global codes
+
 def hour_to_interval(hour):
     hour, minutes = map(int, hour.split(':'))
     return hour * 4 + minutes // 15
 
 async def load_html(codes, message):
+    bar_length = 10
+    step = len(codes) / bar_length
     days = {'Lun': 0, 'Mar': 1, 'Mie': 2, 'Jue': 3, 'Vie': 4, 'Sab': 5, 'Dom': 6}
     options = {}
     progress = 1
-    progress_msg = await message.reply_text('0 %')
+    progress_msg = await message.reply_text('▱'*bar_length + ' - 0 %')
     for code in codes:
-        html_text = get('https://www.ssa.ingenieria.unam.mx/cj/tmp/programacion_horarios/{}.html?_=1675362427735'.format(code)).text
+        try:
+            html_text = requests.get('https://www.ssa.ingenieria.unam.mx/cj/tmp/programacion_horarios/{}.html?_=1675362427735'.format(code), timeout=10).text
+            if html_text.status_code != 200:
+                await message.reply_text('No se pudieron obtener los grupos para el código {}.'.format(code))
+                bar = '▰' * round(progress / step) + '▱' * round((len(codes) - progress) / step) + ' - {:.2f} %'.format(100*progress/len(codes))
+                await progress_msg.edit_text(text=bar)
+                progress += 1
+                continue
+        except requests.exceptions.Timeout:
+            await message.reply_text('No se pudieron obtener los grupos para el código {}.'.format(code))
+            bar = '▰' * round(progress / step) + '▱' * round((len(codes) - progress) / step) + ' - {:.2f} %'.format(100*progress/len(codes))
+            await progress_msg.edit_text(text=bar)
+            progress += 1
+            continue
         soup = BeautifulSoup(html_text, 'html.parser')
         tracks = soup.find_all('td')
         groups = []
@@ -87,12 +105,16 @@ async def load_html(codes, message):
                     places = int(text)
         if groups:
             options[code] = groups
+            await message.reply_text('Se obtuvieron correctamente los grupos para {}.'.format(code))
         else:
-            await message.reply_text('No hay grupos disponibles para {}'.format(code))
-        progress_txt = '{:.2f} %'.format(100*progress/len(codes))
-        await progress_msg.edit_text(text=progress_txt)
+            await message.reply_text('No hay grupos disponibles para {}.'.format(code))
+        bar = '▰' * round(progress / step) + '▱' * round((len(codes) - progress) / step) + ' - {:.2f} %'.format(100*progress/len(codes))
+        await progress_msg.edit_text(text=bar)
         progress += 1
     return options
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text('Usa el comando /iniciar para iniciar a usar el bot.')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     username = update.message.chat.username
@@ -102,10 +124,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text('Ingresa los códigos de tus materias separados por comas.')
     return ENTERING_ASSIGNATURES
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text('Usa el comando /iniciar para iniciar a usar el bot.')
-
 async def handle_codes(update: Update, _: CallbackContext) -> int:
+    global codes
     codes = [code.strip() for code in update.message.text.split(',')]
     codes = [code for code in codes if code != '']
     logger.info(codes)
@@ -114,14 +134,40 @@ async def handle_codes(update: Update, _: CallbackContext) -> int:
             if codes[i][0] == '0':
                 codes[i] = codes[i][1:]
         logger.info(codes)
+        reply_keyboard = [['Obtener grupos', 'Repetir selección']]
+        await update.message.reply_text(
+            'Se obtendrán los grupos de las materias con los siguientes códigos:\n- ' + '\n- '.join(codes), 
+            reply_markup=ReplyKeyboardMarkup(
+                reply_keyboard, 
+                one_time_keyboard=True, 
+                input_field_placeholder='¿Es correcto?'
+            )
+        )
+        return CONFIRMATION
+    else:
+        await update.message.reply_text('Entrada inválida, ingresa solo números separados por comas.')
+        return ENTERING_ASSIGNATURES
+
+async def handle_schedules(update: Update, _: CallbackContext) -> None:
+    pass
+
+async def handle_confirmation(update: Update, _: CallbackContext) -> int:
+    if update.message.text == 'Obtener grupos':
+        global codes
+        await update.message.reply_text('Obteniendo grupos para las materias seleccionadas.', reply_markup=ReplyKeyboardRemove())
         options = await load_html(codes, update.message)
         logger.info(options)
-        return 2
+        if options:
+            return SELECTING_SCHEDULES
+        else:
+            await update.message.reply_text('No hay grupos disponibles para ninguna materia.')
+            await update.message.reply_text('Gracias por usar el bot.')
+            ConversationHandler.END
+    elif update.message.text == 'Repetir selección':
+        await update.message.reply_text('Ingresa los códigos de tus materias separados por comas.', reply_markup=ReplyKeyboardRemove())
+        return ENTERING_ASSIGNATURES
     else:
-        return 1
-
-def handle_schedules(update: Update, _: CallbackContext) -> None:
-    pass
+        pass
 
 def main() -> None:
     application = Application.builder().token('6648405836:AAG0-vh6zU9yKdx3_K-PoYMyrKEvXYnI7yQ').build()
@@ -129,7 +175,8 @@ def main() -> None:
         entry_points=[CommandHandler('iniciar', start)],
         states={
             ENTERING_ASSIGNATURES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_codes)],
-            SELECTING_SCHEDULES: [CallbackQueryHandler(handle_schedules)]
+            SELECTING_SCHEDULES: [CallbackQueryHandler(handle_schedules)],
+            CONFIRMATION: [MessageHandler(filters.Regex("^(Obtener grupos|Repetir selección)$"), handle_confirmation)],
         },
         fallbacks=[]
     )
