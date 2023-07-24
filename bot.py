@@ -172,7 +172,7 @@ async def handle_confirmation(update: Update, _: CallbackContext) -> int:
 def main() -> None:
     application = Application.builder().token('6648405836:AAG0-vh6zU9yKdx3_K-PoYMyrKEvXYnI7yQ').build()
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('iniciar', start)],
+        entry_points=[CommandHandler('start', start)],
         states={
             ENTERING_ASSIGNATURES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_codes)],
             SELECTING_SCHEDULES: [CallbackQueryHandler(handle_schedules)],
