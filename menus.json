@@ -1,0 +1,62 @@
+{
+    "menu1": {
+        "Obtención de datos": {
+            "texto": "¿Qué deseas conocer?",
+            "siguiente_menu": "menu2"
+        },
+        "Salir": {
+            "texto": "Gracias por usar el bot.",
+            "siguiente_menu": null
+        }
+    },
+    "menu2": {
+        "Datos del preparador": {
+            "texto": "",
+            "siguiente_menu": "menu3.1"
+        },
+        "Alarmas": {
+            "texto": "",
+            "siguiente_menu": "menu3.2"
+        }
+    },
+    "menu3.1": {
+        "Consumo de producto": {
+            "texto": "",
+            "siguiente_menu": null
+        },
+        "Consumo total": {
+            "texto": "",
+            "siguiente_menu": null
+        },
+        "Concentración": {
+            "texto": "",
+            "siguiente_menu": null
+        },
+        "Número de ciclos": {
+            "texto": "",
+            "siguiente_menu": null
+        },
+        "Tiempos de dosificación": {
+            "texto": "",
+            "siguiente_menu": null
+        },
+        "Velocidad del Motor (test)": {
+            "texto": "",
+            "siguiente_menu": null
+        }
+    },
+    "menu3.2": {
+        "Producto": {
+            "texto": "",
+            "siguiente_menu": null
+        },
+        "Dosificador": {
+            "texto": "",
+            "siguiente_menu": null
+        },
+        "Agua": {
+            "texto": "",
+            "siguiente_menu": null
+        }
+    }
+} 
