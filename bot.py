@@ -38,6 +38,34 @@ logging.basicConfig(
 )
 
 global codes
+global options
+global is_option_selected
+global subjects
+global current_subject
+global button_lists
+
+c_options = {'Matemáticas': [
+                ['.', 'Profesor 1', 'Horario 1', 'Cupos 1', '.'],
+                ['.', 'Profesor 2', 'Horario 2', 'Cupos 2', '.'],
+                ['.', 'Profesor 3', 'Horario 3', 'Cupos 3', '.'],
+                ['.', 'Profesor 4', 'Horario 4', 'Cupos 4', '.'],
+                ['.', 'Profesor 5', 'Horario 5', 'Cupos 5', '.'],
+            ], 
+            'Geografía': [
+                ['.', 'Profesor 1', 'Horario 1', 'Cupos 1', '.'],
+                ['.', 'Profesor 2', 'Horario 2', 'Cupos 2', '.'],
+                ['.', 'Profesor 3', 'Horario 3', 'Cupos 3', '.'],
+                ['.', 'Profesor 4', 'Horario 4', 'Cupos 4', '.'],
+                ['.', 'Profesor 5', 'Horario 5', 'Cupos 5', '.'],
+            ], 
+            'Artes': [
+                ['.', 'Profesor 1', 'Horario 1', 'Cupos 1', '.'],
+                ['.', 'Profesor 2', 'Horario 2', 'Cupos 2', '.'],
+                ['.', 'Profesor 3', 'Horario 3', 'Cupos 3', '.'],
+                ['.', 'Profesor 4', 'Horario 4', 'Cupos 4', '.'],
+                ['.', 'Profesor 5', 'Horario 5', 'Cupos 5', '.'],
+            ]
+        }
 
 def hour_to_interval(hour):
     hour, minutes = map(int, hour.split(':'))
@@ -53,12 +81,6 @@ async def load_html(codes, message):
     for code in codes:
         try:
             html_text = requests.get('https://www.ssa.ingenieria.unam.mx/cj/tmp/programacion_horarios/{}.html?_=1675362427735'.format(code), timeout=10).text
-            if html_text.status_code != 200:
-                await message.reply_text('No se pudieron obtener los grupos para el código {}.'.format(code))
-                bar = '▰' * round(progress / step) + '▱' * round((len(codes) - progress) / step) + ' - {:.2f} %'.format(100*progress/len(codes))
-                await progress_msg.edit_text(text=bar)
-                progress += 1
-                continue
         except requests.exceptions.Timeout:
             await message.reply_text('No se pudieron obtener los grupos para el código {}.'.format(code))
             bar = '▰' * round(progress / step) + '▱' * round((len(codes) - progress) / step) + ' - {:.2f} %'.format(100*progress/len(codes))
@@ -149,15 +171,78 @@ async def handle_codes(update: Update, _: CallbackContext) -> int:
         return ENTERING_ASSIGNATURES
 
 async def handle_schedules(update: Update, _: CallbackContext) -> None:
-    pass
+    global codes
+    global options
+    global is_option_selected
+    global subjects
+    global current_subject
+    global button_lists
+    query = update.callback_query
+    await query.answer()
+    selected_option = query.data
+    
+    if selected_option == 'Aceptar':
+        if subjects[current_subject] == subjects[-1]:
+            pass
+        else:
+            current_subject += 1
+            button_list = []
+            for option in options[subjects[current_subject]]:
+                button_list.append([InlineKeyboardButton('{} | {} | {} | ☐'.format(option[1], option[-2], option[2]), 
+                                            callback_data=option[1])])
+            button_list.append([InlineKeyboardButton('Aceptar', callback_data='Aceptar')])
+            button_lists[subjects[current_subject]] = button_list
+            reply_markup = InlineKeyboardMarkup(button_list)
+            await query.message.edit_text('Selecciona tus grupos para {}'.format(subjects[current_subject]), reply_markup=reply_markup)
+    else:
+        button_list = []
+        for option in options[subjects[current_subject]]:
+            if option[1] == selected_option:
+                value = is_option_selected[subjects[current_subject]][selected_option]
+                is_option_selected[subjects[current_subject]][selected_option] = not value
+            if is_option_selected[subjects[current_subject]][option[1]]:
+                button_list.append([InlineKeyboardButton('{} | {} | {} | ☑'.format(option[1], option[-2], option[2]), 
+                                            callback_data=option[1])])
+            else:
+                button_list.append([InlineKeyboardButton('{} | {} | {} | ☐'.format(option[1], option[-2], option[2]), 
+                                            callback_data=option[1])])
+        button_list.append([InlineKeyboardButton('Aceptar', callback_data='Aceptar')])
+        logger.info(button_list)
+        button_lists[subjects[current_subject]] = button_list
+        reply_markup = InlineKeyboardMarkup(button_list)
+        await query.message.edit_text('Selecciona tus grupos para {}'.format(subjects[current_subject]), reply_markup=reply_markup)
+    return SELECTING_SCHEDULES
 
 async def handle_confirmation(update: Update, _: CallbackContext) -> int:
+    global codes
+    global options
+    global is_option_selected
+    global subjects
+    global current_subject
+    global button_lists
     if update.message.text == 'Obtener grupos':
         global codes
         await update.message.reply_text('Obteniendo grupos para las materias seleccionadas.', reply_markup=ReplyKeyboardRemove())
         options = await load_html(codes, update.message)
         logger.info(options)
+        options = c_options
         if options:
+            subjects = []
+            button_lists = {}
+            is_option_selected = {}
+            for subject, list_of_options in options.items():
+                subjects.append(subject)
+                button_list = []
+                is_option_selected[subject] = {}
+                for option in list_of_options:
+                    button_list.append([InlineKeyboardButton('{} | {} | {} | ☐'.format(option[1], option[-2], option[2]), 
+                                                callback_data=option[1])])
+                    is_option_selected[subject][option[1]] = False
+                button_list.append([InlineKeyboardButton('Aceptar', callback_data='Aceptar')])
+                button_lists[subject] = button_list
+            current_subject = 0
+            reply_markup = InlineKeyboardMarkup(button_lists[subjects[current_subject]])
+            await update.message.reply_text('Selecciona tus grupos para {}'.format(subjects[current_subject]), reply_markup=reply_markup)
             return SELECTING_SCHEDULES
         else:
             await update.message.reply_text('No hay grupos disponibles para ninguna materia.')
