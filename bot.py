@@ -1,5 +1,4 @@
-from os import system, name, remove
-from time import sleep
+from os import remove
 import requests
 from bs4 import BeautifulSoup
 from numpy import zeros, int16, max as nmax, add, ndenumerate
@@ -11,24 +10,24 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Alignment
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, ConversationHandler, MessageHandler, CallbackQueryHandler, CallbackContext, ContextTypes, filters
-import logging, json
 import logging.handlers
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-CONFIRMATION = 0
-ENTERING_ASSIGNATURES = 1
-SELECTING_SCHEDULES = 2
-EXIT = 3
+selenium_options = webdriver.ChromeOptions()
+selenium_options.add_argument('--headless')
+driver = webdriver.Chrome(options=selenium_options)
+wait = WebDriverWait(driver, 10)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
 log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 formatter = logging.Formatter(log_format)
-
-file_handler = logging.handlers.RotatingFileHandler('/home/sr-gus/telegram-bot-horarios/logs/logs.log')
+file_handler = logging.handlers.RotatingFileHandler('D:\\OneDrive\\Escritorio\\telegram-bot-horarios\\logs\\logs.log', maxBytes=26214400, backupCount=5)
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
-
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -45,10 +44,46 @@ global subjects
 global current_subject
 global button_lists
 global temp_msgs
+global get_score
+
+CONFIRMATION = 0
+ENTERING_ASSIGNATURES = 1
+GETTING_SCORE = 2
+SELECTING_SCHEDULES = 3
+EXIT = 4
 
 def hour_to_interval(hour):
     hour, minutes = map(int, hour.split(':'))
     return hour * 4 + minutes // 15
+
+def load_score(name):
+    parentheses = name.find('(')
+    if parentheses != -1:
+        name = name[:parentheses-1]
+    name = ' '.join(name.split(' ')[1:])
+    url = 'https://www.google.com/search?q={}'.format(name.replace(' ', '+'))
+    try:
+        driver.get(url)
+        urls_gstitle = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'a[href*="www.misprofesores.com"]')))
+        urls_results = []
+        for urls in urls_gstitle:
+            urls_results.append({
+                'texto': urls.text,
+                'url': urls.get_attribute('href')
+            })
+        for result in urls_results:
+            if ' '.join(name.split(' ')[1:]).lower() in result['texto'].lower():
+                try:
+                    driver.get(result['url'])
+                    divs_grade = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'div.grade')))
+                    if divs_grade:
+                        return divs_grade
+                    else: 
+                        return None
+                except:
+                    pass 
+    except Exception as e:
+        return None
 
 async def load_html(codes, message):
     bar_length = 10
@@ -82,7 +117,7 @@ async def load_html(codes, message):
             if text.isdigit() and len(group) >= 2 and int(text) < 100:
                 places = int(text)
                 group.append(places)
-            if text == 'L+' and (len(code) != 4 or (code[0] != '5' and code[0] != '6')):
+            if text == 'L+' and (len(code) != 4 or (code[0] != '5' and code[0] != '6' and code[0] != '7')):
                 save = False
             if ':' in text and len(group) >= 3:
                 hours.append(text)
@@ -95,12 +130,22 @@ async def load_html(codes, message):
                 for day in days_occupied:
                     schedule[start:end, day] = 1
                 reading_schedule = False
-            if (text == code and i > 0) or (i == (len(tracks)-1)):
+            if (len(text) > 2 and text.isdigit() and i > 0) or (i == (len(tracks)-1)):
                 group.append(' / '.join(hours))
                 hours = []
                 group.append(schedule)
                 schedule = zeros((96, 7), dtype=int16)
+                logger.info(places)
                 if places > 0 and save:
+                    if get_score:
+                        logger.info(f'Obteniendo calificaciones de {group[2]}')
+                        score = load_score(group[2])
+                        if score:
+                            score_text = f'\nCalidad General: {score[0].text}\nLo Recomiendan: {score[1].text}\nDificultad: {score[2].text}'
+                            group.append(score_text)
+                            logger.info('Calificaciones obtenidas')
+                        else:
+                            logger.info('No se pudieron obtener las calificaciones')
                     groups.append(group.copy())
                     group = [text]
                 save = True
@@ -203,18 +248,24 @@ async def to_xlsx(schedules, message):
             if max_width > 8:
                 sheet.column_dimensions[column[0].column_letter].width = max_width*1.2
         percentage = 100*schedule_count/len(schedules)
-        if len(schedules) < 10  or schedule_count % (len(schedules)//10) == 0:
-            bar = '▰' * round(schedule_count / step) + '▱' * round((len(schedules) - schedule_count) / step) + ' - {:.2f} %'.format(percentage)
-            await progress_msg.edit_text(text=bar)
+        try:
+            if len(schedules) > 100 and schedule_count % (len(schedules)//(15*len(schedules)//100)) == 0:
+                bar = '▰' * round(schedule_count / step) + '▱' * round((len(schedules) - schedule_count) / step) + ' - {:.2f} %'.format(percentage)
+                await progress_msg.edit_text(text=bar)
+            elif len(schedules) < 10  or schedule_count % (len(schedules)//10) == 0:
+                bar = '▰' * round(schedule_count / step) + '▱' * round((len(schedules) - schedule_count) / step) + ' - {:.2f} %'.format(percentage)
+                await progress_msg.edit_text(text=bar)
+        except Exception as e:
+            logger.info(f'Error en barra de progreso: {e}')
         schedule_count += 1
     await progress_msg.edit_text('▰'*bar_length + ' - 100 %')
-    book.save(filename = f'{message.chat_id}.xlsx')
+    book.save(filename = f'D:\\OneDrive\\Escritorio\\telegram-bot-horarios\\{message.chat_id}.xlsx')
     await message.reply_text('Tus horarios han sido exportados a Excel exitosamente.')
-    await message.reply_document(document=open(f'{message.chat_id}.xlsx', 'rb'))
-    remove(f'{message.chat_id}.xlsx')
+    await message.reply_document(document=open(f'D:\\OneDrive\\Escritorio\\telegram-bot-horarios\\{message.chat_id}.xlsx', 'rb'))
+    remove(f'D:\\OneDrive\\Escritorio\\telegram-bot-horarios\\{message.chat_id}.xlsx')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text('Usa el comando /iniciar para iniciar a usar el bot.')
+    await update.message.reply_text('Usa el comando /iniciar para iniciar a usar el bot, puedes cancelar el proceso en cualquier momento con /cancelar..')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     username = update.message.chat.username
@@ -224,6 +275,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text('Ingresa los códigos de tus materias separados por comas.')
     return ENTERING_ASSIGNATURES
 
+async def handle_score(update: Update, _: CallbackContext) -> int:
+    global get_score
+    if update.message.text == "Sí":
+        get_score = True
+    else:
+        get_score = False
+    reply_keyboard = [['Obtener grupos', 'Repetir selección']]
+    await update.message.reply_text(
+        'Se obtendrán los grupos de las materias con los siguientes códigos:\n- ' + '\n- '.join(codes), 
+        reply_markup=ReplyKeyboardMarkup(
+            reply_keyboard, 
+            one_time_keyboard=True, 
+            input_field_placeholder='¿Es correcto?'
+        )
+    )
+    return CONFIRMATION
+
 async def handle_codes(update: Update, _: CallbackContext) -> int:
     global codes
     codes = [code.strip() for code in update.message.text.split(',')]
@@ -232,21 +300,22 @@ async def handle_codes(update: Update, _: CallbackContext) -> int:
         for i in range(len(codes)):
             if codes[i][0] == '0':
                 codes[i] = codes[i][1:]
-        reply_keyboard = [['Obtener grupos', 'Repetir selección']]
+        logger.info(f'Códigos de materias ingresados: {codes}')
+        reply_keyboard = [['Sí', 'No']]
         await update.message.reply_text(
-            'Se obtendrán los grupos de las materias con los siguientes códigos:\n- ' + '\n- '.join(codes), 
+            '¿Deseas obtener la calificación de los profesores en MisProfesores? Esto aumentará considerablemente el tiempo de espera para cargar los grupos.',
             reply_markup=ReplyKeyboardMarkup(
                 reply_keyboard, 
                 one_time_keyboard=True, 
-                input_field_placeholder='¿Es correcto?'
+                input_field_placeholder='Sí/No'
             )
         )
-        return CONFIRMATION
+        return GETTING_SCORE
     else:
         await update.message.reply_text('Entrada inválida, ingresa solo números separados por comas.')
         return ENTERING_ASSIGNATURES
 
-async def handle_schedules(update: Update, _: CallbackContext) -> None:
+async def handle_schedules(update: Update, _: CallbackContext) -> int:
     global codes
     global options
     global is_option_selected
@@ -254,6 +323,7 @@ async def handle_schedules(update: Update, _: CallbackContext) -> None:
     global current_subject
     global button_lists
     global temp_msgs
+    global get_score
    
     query = update.callback_query
     await query.answer()
@@ -293,10 +363,14 @@ async def handle_schedules(update: Update, _: CallbackContext) -> None:
                 for element in option:
                     if isinstance(element, int) and element < 100:
                         cupo = element
-                text += f'\n\nGRUPO {option[1]}\nProfesor: {option[2]}\nHorario: {option[-2]}'
+                if get_score and isinstance(option[-1], str):
+                    text += f'\n\nGRUPO {option[1]}\nProfesor: {option[2]}\nHorario: {option[-3]}{option[-1]}'
+                    option.pop()
+                else:
+                    text += f'\n\nGRUPO {option[1]}\nProfesor: {option[2]}\nHorario: {option[-2]}'
                 button_list.append([InlineKeyboardButton(f'GRUPO {option[1]} | {cupo} ☐', callback_data=option[1])])
                 count_options += 1
-                if count_options % 10 == 0 or count_options == len(options[subjects[current_subject]]):
+                if count_options % 7 == 0 or count_options == len(options[subjects[current_subject]]):
                     temp_msgs.append(await query.message.reply_text(text))
                     text = ''
             button_list.append([InlineKeyboardButton('Aceptar', callback_data='Aceptar')])
@@ -332,7 +406,6 @@ async def handle_confirmation(update: Update, _: CallbackContext) -> int:
     global temp_msgs
  
     if update.message.text == 'Obtener grupos':
-        global codes
         await update.message.reply_text('Obteniendo grupos para las materias seleccionadas.', reply_markup=ReplyKeyboardRemove())
         options = await load_html(codes, update.message)
         if options:
@@ -353,9 +426,13 @@ async def handle_confirmation(update: Update, _: CallbackContext) -> int:
                         if isinstance(element, int) and element < 100:
                             cupo = element
                     if subject == subjects[current_subject]:
-                        text += f'\n\nGRUPO {option[1]}\nProfesor: {option[2]}\nHorario: {option[-2]}'
+                        if get_score and isinstance(option[-1], str):
+                            text += f'\n\nGRUPO {option[1]}\nProfesor: {option[2]}\nHorario: {option[-3]}{option[-1]}'
+                            option.pop()
+                        else:
+                            text += f'\n\nGRUPO {option[1]}\nProfesor: {option[2]}\nHorario: {option[-2]}'
                         count_options += 1
-                        if count_options % 10 == 0 or count_options == len(list_of_options):
+                        if count_options % 7 == 0 or count_options == len(list_of_options):
                             temp_msgs.append(await update.message.reply_text(text))
                             text = ''
                     button_list.append([InlineKeyboardButton(f'GRUPO {option[1]} | {cupo} ☐', callback_data=option[1])])
@@ -373,7 +450,7 @@ async def handle_confirmation(update: Update, _: CallbackContext) -> int:
         await update.message.reply_text('Ingresa los códigos de tus materias separados por comas.', reply_markup=ReplyKeyboardRemove())
         return ENTERING_ASSIGNATURES
     else:
-        pass
+        await update.message.reply_text('Ingresa los códigos de tus materias separados por comas.', reply_markup=ReplyKeyboardRemove())
 
 def main() -> None:
     global application
@@ -385,9 +462,10 @@ def main() -> None:
             ENTERING_ASSIGNATURES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_codes)],
             SELECTING_SCHEDULES: [CallbackQueryHandler(handle_schedules)],
             CONFIRMATION: [MessageHandler(filters.Regex("^(Obtener grupos|Repetir selección)$"), handle_confirmation)],
+            GETTING_SCORE: [MessageHandler(filters.Regex("^(Sí|No)$"), handle_score)],
             EXIT: [CommandHandler('start', start)],
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler('cancelar', start)]
     )
     application.add_handler(CommandHandler('help', help_command))
     application.add_handler(conv_handler)
